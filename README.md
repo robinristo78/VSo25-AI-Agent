@@ -11,7 +11,7 @@ Local multi-agent system (CrewAI + Ollama Llama 3.2 + Playwright) that turns any
 - **Localhost-only HTTP server** serving a dedicated `workspace/` folder (ZIP or HTML upload)
 - **Responsive preview + download**
 - **Scorecard UI** with expandable findings
-- Fully offline after Ollama model download (except Tailwind CDN in generated pages)
+- **Web Search tool** (DuckDuckGo HTML) so agents can fetch real image URLs, design references, and accurate content when the internet is available. Falls back gracefully offline.
 
 ## Architecture
 

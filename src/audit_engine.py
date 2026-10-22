@@ -48,14 +48,36 @@ def run_audit(url: str = "http://127.0.0.1:8000/index.html") -> Dict[str, Any]:
                 })
                 score -= 10
 
-            # Images: missing alt + broken/placeholder sources
+            # Images: missing alt + broken/placeholder sources (including CSS backgrounds)
             images = soup.find_all("img")
             missing_alt = [img.get("src", "unknown") for img in images if not img.get("alt")]
             broken_srcs = []
+            placeholder_domains = ("placeholder.com", "via.placeholder", "placehold.it", "dummyimage.com", "placekitten", "picsum.photos/placeholder")
+
             for img in images:
                 src = (img.get("src") or "").strip()
-                if not src or src in ("#", "/", "javascript:void(0)") or src.startswith("data:") is False and len(src) < 4:
+                if not src or src in ("#", "/", "javascript:void(0)") or (not src.startswith("data:") and len(src) < 4):
                     broken_srcs.append(src or "(empty)")
+                elif any(d in src.lower() for d in placeholder_domains):
+                    broken_srcs.append(src)
+
+            # Also scan inline styles and <style> blocks for placeholder backgrounds
+            style_text = ""
+            for style_tag in soup.find_all("style"):
+                style_text += style_tag.get_text() + " "
+            for tag in soup.find_all(True):
+                if tag.get("style"):
+                    style_text += tag["style"] + " "
+            if any(d in style_text.lower() for d in placeholder_domains):
+                findings.append({
+                    "category": "Content / Assets",
+                    "severity": "high",
+                    "issue": "Placeholder image service detected in CSS (via.placeholder.com or similar)",
+                    "details": "Background images use a known placeholder domain",
+                    "fix": "Replace with real thematic image URLs (Unsplash, etc.) or pure CSS graphics."
+                })
+                score -= 18
+
             if missing_alt:
                 findings.append({
                     "category": "Accessibility",
@@ -71,7 +93,7 @@ def run_audit(url: str = "http://127.0.0.1:8000/index.html") -> Dict[str, Any]:
                     "severity": "high",
                     "issue": f"{len(broken_srcs)} image(s) have broken or placeholder src",
                     "details": ", ".join(broken_srcs[:4]),
-                    "fix": "Replace placeholder srcs (e.g. '#') with real image URLs or local assets."
+                    "fix": "Replace placeholder srcs with real image URLs or local assets."
                 })
                 score -= min(20, len(broken_srcs) * 6)
 
@@ -183,18 +205,72 @@ def run_audit(url: str = "http://127.0.0.1:8000/index.html") -> Dict[str, Any]:
                 })
                 score -= 12
 
-            # Weak visual hierarchy / generic styling signals
-            style_classes = " ".join(soup.get("class", []) + [c for tag in soup.find_all(True) for c in tag.get("class", [])])
-            has_custom_fonts = bool(soup.find("link", href=re.compile(r"fonts\.google|fonts\.gstatic")))
-            neon_or_accent = any(x in style_classes for x in ["neon", "cyan", "pink", "fuchsia", "lime", "amber", "orange"])
-            if not has_custom_fonts and "cyberpunk" in text_content:
+            # Content density / sparse page check
+            word_count = len(text_content.split())
+            if word_count < 40:
                 findings.append({
-                    "category": "Design / Theme",
-                    "severity": "low",
-                    "issue": "Theme (cyberpunk) mentioned but no distinctive typography loaded",
-                    "fix": "Add a distinctive font (e.g. via Google Fonts) that supports the theme."
+                    "category": "Content Quality",
+                    "severity": "high",
+                    "issue": f"Very sparse content ({word_count} words)",
+                    "details": "Page has almost no real text",
+                    "fix": "Add meaningful copy for each section (hero subtext, feature descriptions, CTA)."
                 })
-                score -= 4
+                score -= 15
+            elif word_count < 80:
+                findings.append({
+                    "category": "Content Quality",
+                    "severity": "medium",
+                    "issue": f"Thin content ({word_count} words)",
+                    "fix": "Expand sections with specific, thematic details."
+                })
+                score -= 8
+
+            # Suspicious or likely-broken external image URLs (Leonardo private, etc.)
+            all_urls = re.findall(r"https?://[^\s\"')]+", html)
+            suspicious = [u for u in all_urls if any(x in u.lower() for x in ["leonardo.ai/generation", "app.leonardo", "placeholder", "via.placeholder"])]
+            if suspicious:
+                findings.append({
+                    "category": "Content / Assets",
+                    "severity": "high",
+                    "issue": "Likely inaccessible or temporary image URL(s) detected",
+                    "details": ", ".join(suspicious[:2]),
+                    "fix": "Use stable public image URLs (Unsplash, etc.) or pure CSS."
+                })
+                score -= 12
+
+            # Try to detect failed image loads via Playwright
+            try:
+                failed_images = page.evaluate("""() => {
+                    const imgs = Array.from(document.images);
+                    return imgs.filter(img => !img.complete || img.naturalWidth === 0).map(img => img.src);
+                }""")
+                if failed_images:
+                    findings.append({
+                        "category": "Content / Assets",
+                        "severity": "high",
+                        "issue": f"{len(failed_images)} image(s) failed to load",
+                        "details": ", ".join(failed_images[:2]),
+                        "fix": "Replace broken image sources."
+                    })
+                    score -= min(15, len(failed_images) * 5)
+            except Exception:
+                pass
+
+            # Low color contrast approximation (text vs common dark backgrounds)
+            # Simple check: if body text is very light on very light or very dark on dark without enough difference
+            body_style = soup.find("body")
+            if body_style and "color:" in (body_style.get("style") or "") and "#fff" in (body_style.get("style") or "").lower() and "#1" in (body_style.get("style") or ""):
+                pass  # acceptable dark theme
+            # More useful: flag if almost no visual variety
+            unique_colors = len(set(re.findall(r"#[0-9a-fA-F]{3,6}", html)))
+            if unique_colors < 4:
+                findings.append({
+                    "category": "Design / Visual",
+                    "severity": "medium",
+                    "issue": "Very limited color palette (low visual variety)",
+                    "fix": "Introduce accent colors that support the theme."
+                })
+                score -= 6
 
             metrics = {
                 "images": len(images),

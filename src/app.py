@@ -49,13 +49,17 @@ def start_server():
 start_server()
 
 # ---------------------------------------------------------------------------
-# Local LLM
+# Local LLM (configurable)
 # ---------------------------------------------------------------------------
-local_llm = LLM(
-    model="ollama/llama3.2",
-    base_url="http://localhost:11434",
-    temperature=0.2,
-)
+# Change model in the sidebar or here. Better models dramatically improve results.
+MODEL_NAME = "ollama/llama3.2"  # fallback; overridden by sidebar if set
+
+def get_llm(model: str, temperature: float = 0.3):
+    return LLM(
+        model=model,
+        base_url="http://localhost:11434",
+        temperature=temperature,
+    )
 
 # ---------------------------------------------------------------------------
 # Tools
@@ -132,39 +136,57 @@ with st.sidebar:
                 st.rerun()
 
     st.subheader("⚙️ Settings")
+    model_choice = st.selectbox(
+        "Ollama model",
+        ["llama3.2", "llama3.1:8b", "qwen2.5:7b", "qwen2.5:14b", "mistral:7b", "gemma2:9b"],
+        index=0,
+        help="Larger models (8B+) are much stronger at creative generation and accurate auditing."
+    )
     max_iterations = st.slider("Max fix iterations", 1, 4, 2)
     score_threshold = st.slider("Stop when score ≥", 70, 95, 85)
+    creative_mode = st.checkbox("Creative generation mode", value=True, help="Higher temperature and bolder design prompts")
     st.info(f"Serving from http://127.0.0.1:{PORT}/index.html")
 
 # ---------------------------------------------------------------------------
-# Agents
+# Agents (created fresh each run so model/temperature can change)
 # ---------------------------------------------------------------------------
-auditor = Agent(
-    role="UX & Design Auditor",
-    goal="Analyze the live page using the audit tool and produce a clear, prioritized, critical list of issues covering accessibility, content quality, broken assets, and design/theme fit. Be honest about mediocre or generic designs.",
-    backstory="""You are a senior UX designer and accessibility engineer. 
-You use the audit tool for facts, then add design judgment: placeholder text, broken images, weak hierarchy, generic styling, missing atmosphere, non-functional CTAs, and whether the page actually matches the requested theme (e.g. cyberpunk). 
-When the internet is available you may use the Web Search tool to compare against real reference sites or find better image/content ideas.
-Never give a perfect score if the page still contains dummy content, broken assets, or feels unfinished. Be concise and concrete.""",
-    tools=[audit_tool, web_search_tool],
-    llm=local_llm,
-    allow_delegation=False,
-    verbose=False,
-)
+def make_agents(model_name: str, creative: bool):
+    gen_temp = 0.75 if creative else 0.4
+    audit_temp = 0.15  # keep auditing factual
 
-fixer = Agent(
-    role="Frontend Developer",
-    goal="Write or update clean, modern, accessible HTML/CSS/JS. Choose the most appropriate approach (pure CSS, Tailwind, Bootstrap, vanilla JS, etc.) based on the request. Output only raw HTML.",
-    backstory="""You are an expert web developer who is not locked into any single framework.
-You decide whether to use pure CSS, Tailwind (via CDN), Bootstrap, or lightweight vanilla JS depending on what best serves the design.
-When the internet is available, actively use the Web Search tool to find real image URLs (Unsplash, etc.), design references, color palettes, or accurate copy that improves the result.
-When fixing an existing page, preserve its current styling approach unless the user asks to change it.
-You ALWAYS output only the complete raw HTML document — no markdown fences, no explanations.""",
-    tools=[web_search_tool],
-    llm=local_llm,
-    allow_delegation=False,
-    verbose=False,
-)
+    llm_gen = get_llm(f"ollama/{model_name}", temperature=gen_temp)
+    llm_audit = get_llm(f"ollama/{model_name}", temperature=audit_temp)
+
+    auditor = Agent(
+        role="UX & Design Auditor",
+        goal="Produce a factual, prioritized audit. Base every claim on the tool output or direct observation of the HTML. Do not invent issues.",
+        backstory="""You are a strict, evidence-based UX auditor.
+Your only source of concrete issues is the Run UX Audit tool output. 
+Do not invent problems that the tool did not report. 
+You may add a short, clearly labeled "Design notes" section for atmosphere and theme fit, but you must be critical of sparse content, weak hierarchy, generic layouts, and unfinished pages. 
+Never give an overall positive assessment if the page has high-severity findings or feels like a skeleton. 
+Be concise and precise. Never output JSON or tool-call syntax.""",
+        tools=[audit_tool, web_search_tool],
+        llm=llm_audit,
+        allow_delegation=False,
+        verbose=False,
+    )
+
+    fixer = Agent(
+        role="Frontend Developer",
+        goal="Create distinctive, high-quality HTML pages or surgically improve existing ones. Output only raw HTML.",
+        backstory="""You are a creative senior frontend developer with strong visual taste. 
+You produce pages that feel intentional and atmospheric rather than generic templates. 
+You freely choose pure CSS, Tailwind, Bootstrap, or custom styles based on what serves the concept best. 
+When internet is available you use Web Search to gather real image URLs, color references, or inspiration before coding. 
+You avoid placeholder text and broken image sources. 
+You ALWAYS return only the complete raw HTML document — no markdown fences, no commentary.""",
+        tools=[web_search_tool],
+        llm=llm_gen,
+        allow_delegation=False,
+        verbose=False,
+    )
+    return auditor, fixer
 
 # ---------------------------------------------------------------------------
 # Chat UI
@@ -192,21 +214,32 @@ if prompt:
         else:
             current_html = ""
 
+        # Create agents with current settings
+        auditor, fixer = make_agents(model_choice, creative_mode)
+
         # Simple intent detection
         is_audit_only = any(w in prompt.lower() for w in ["audit", "check", "review", "judge", "evaluate"])
         is_generate = any(w in prompt.lower() for w in ["create", "build", "generate", "make a", "new"]) and not current_html
 
         if is_generate or not current_html:
             status.write("No existing page → generating new design…")
+            creative_hint = """Be bold and atmospheric. Create a distinctive visual identity:
+- Unique color palette and strong typography (load real fonts via Google Fonts or system stacks — never invent font names like 'Cyberpunk Modern')
+- Layered layout with clear hierarchy, not just stacked centered blocks
+- Subtle CSS motion, glows, or texture where it fits the theme
+- Real thematic imagery (search for Unsplash URLs) or pure CSS graphics — never via.placeholder.com or similar
+Avoid generic centered-card templates.""" if creative_mode else "Keep the design clean and functional."
             task_gen = Task(
                 description=f"""Create a complete, modern, accessible HTML page for this request:
 {prompt}
 
+{creative_hint}
+
 Rules:
-- Choose the styling approach that fits best (pure CSS in a <style> tag, Tailwind CDN, Bootstrap CDN, or a mix). Do NOT default to Tailwind unless it clearly helps.
-- If internet is available, use the Web Search tool to find real theme-appropriate image URLs, design references, or accurate copy before writing the page.
-- Include a proper viewport meta tag, semantic HTML, and good contrast.
-- Use real image URLs (never src="#") and real copy (no Lorem ipsum).
+- Choose the styling approach that best serves the concept (pure CSS in <style>, Tailwind, Bootstrap, or custom). Do not default to Tailwind.
+- If internet is available, use Web Search first for real image URLs, color inspiration, or reference sites.
+- Real copy only (no Lorem ipsum). Real image URLs only (never src="#" or placeholder.com services).
+- Single clear <h1>, semantic structure, viewport meta, good contrast.
 - Output ONLY the raw HTML document. No markdown fences, no explanations.""",
                 expected_output="Raw HTML document",
                 agent=fixer,
@@ -214,7 +247,6 @@ Rules:
             crew = Crew(agents=[fixer], tasks=[task_gen], verbose=False)
             result = crew.kickoff()
             new_html = str(result).strip()
-            # Guardrail: strip markdown fences if present
             if new_html.startswith("```"):
                 new_html = "\n".join(new_html.splitlines()[1:-1])
             index_path.write_text(new_html, encoding="utf-8")
@@ -238,15 +270,16 @@ Rules:
                 task_audit = Task(
                     description=f"""User request: {prompt}
 
-Use the Run UX Audit tool, then write a critical, honest UI/UX evaluation.
-Cover:
-- Structural/accessibility issues from the tool
-- Content quality (placeholders, dummy text, broken images)
-- Visual hierarchy, atmosphere, and whether it matches the intended theme
-- Concrete, prioritized fixes
+1. Call the Run UX Audit tool and treat its findings as the only factual issues.
+2. Write the report in this structure:
+   - Deterministic findings (quote the tool’s issues and severities exactly)
+   - Design notes (only if relevant: atmosphere, theme strength, hierarchy, content depth — be critical)
+   - Overall assessment (harsh if the page is sparse, generic, or has high-severity problems)
+3. Do not claim “placeholder images” or “placeholder text” unless the tool explicitly reported them.
+4. Never invent accessibility or structural problems.
 
-Be strict. Do not give a perfect score if the page still feels unfinished or generic.""",
-                    expected_output="A concise critical UX report in plain English with a recommended overall score (0-100).",
+Be strict. A skeleton page with little content should not receive a favorable assessment.""",
+                    expected_output="A strict, evidence-based UX report in plain English.",
                     agent=auditor,
                 )
                 crew_audit = Crew(agents=[auditor], tasks=[task_audit], verbose=False)
