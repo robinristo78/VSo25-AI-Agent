@@ -13,7 +13,7 @@ from crewai import Agent, Task, Crew, LLM
 from crewai.tools import tool
 
 from audit_engine import run_audit, format_audit_for_llm
-from project_context import build_finding_context
+from project_context import build_finding_context, file_tree
 
 # ---------------------------------------------------------------------------
 # Config & constants
@@ -67,8 +67,8 @@ def get_llm(model: str, temperature: float = 0.3):
 # ---------------------------------------------------------------------------
 @tool("Run UX Audit")
 def audit_tool() -> str:
-    """Runs a full deterministic + structural UX audit on the currently served page and returns a scored report."""
-    result = run_audit(get_current_page_url())
+    """Runs a full deterministic UX audit on the currently served page."""
+    result = run_audit(get_current_page_url(), workspace=WORKSPACE, page_relpath=st.session_state.get("page_relpath", "index.html"))
     return format_audit_for_llm(result)
 
 
@@ -92,7 +92,9 @@ def web_search_tool(query: str) -> str:
             href = a.get("href", "")
             results.append(f"- {title}: {href}")
         if not results:
+            st.session_state.last_search_ok = False
             return "No useful results found."
+        st.session_state.last_search_ok = True
         return "Web search results:\n" + "\n".join(results)
     except Exception as e:
         return f"Web search failed (likely offline): {e}"
@@ -108,6 +110,10 @@ if "current_html" not in st.session_state:
     st.session_state.current_html = ""
 if "last_audit" not in st.session_state:
     st.session_state.last_audit = None
+if "score_history" not in st.session_state:
+    st.session_state.score_history = []
+if "last_search_ok" not in st.session_state:
+    st.session_state.last_search_ok = None
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -191,6 +197,8 @@ with st.sidebar:
     score_threshold = st.slider("Stop when score ≥", 70, 95, 85)
     creative_mode = st.checkbox("Creative generation mode", value=True, help="Higher temperature and bolder design prompts")
     st.info(f"Serving: {get_current_page_url()}")
+    with st.expander("Project files"):
+        st.code(file_tree(WORKSPACE), language="text")
 
 # ---------------------------------------------------------------------------
 # Agents (created fresh each run so model/temperature can change)
@@ -241,6 +249,8 @@ for msg in st.session_state.messages:
         st.markdown(msg["content"])
 
 prompt = st.chat_input("Ask the agents to audit, fix, or build something…")
+if st.session_state.get("pending_fix"):
+    prompt = st.session_state.pop("pending_fix")
 
 if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -267,7 +277,9 @@ if prompt:
         is_generate = any(w in prompt.lower() for w in ["create", "build", "generate", "make a", "new"]) and not current_html
 
         if is_generate or not current_html:
-            status.write("No existing page → generating new design…")
+            status.write("Planning sections and assets…")
+            # Lightweight planner guidance injected into the generation prompt
+            plan_hint = "Plan first: hero with real image, 2-3 content sections with short descriptions, clear CTA, single h1, stable image URLs."
             creative_hint = """Be bold and atmospheric. Create a distinctive visual identity:
 - Unique color palette and strong typography (load real fonts via Google Fonts or system stacks — never invent font names like 'Cyberpunk Modern')
 - Layered layout with clear hierarchy, not just stacked centered blocks
@@ -279,6 +291,8 @@ Avoid generic centered-card templates.""" if creative_mode else "Keep the design
 {prompt}
 
 {creative_hint}
+
+{plan_hint}
 
 Rules:
 - Choose the styling approach that best serves the concept (pure CSS in <style>, Tailwind, Bootstrap, or custom). Do not default to Tailwind.
@@ -305,7 +319,7 @@ Rules:
         agent_judgment = ""
         for iteration in range(max_iterations):
             status.write(f"Iteration {iteration + 1}/{max_iterations}: running deterministic audit…")
-            audit = run_audit(get_current_page_url())
+            audit = run_audit(get_current_page_url(), workspace=WORKSPACE, page_relpath=st.session_state.page_relpath)
             st.session_state.last_audit = audit
             final_score = audit["score"]
             progress_log.append(f"Audit #{iteration+1}: score {final_score}")
@@ -374,6 +388,7 @@ Output ONLY the complete corrected raw HTML. No markdown fences.""",
             "prompt": prompt,
         }
         st.session_state.versions.append(version)
+        st.session_state.score_history.append(final_score)
         (VERSIONS / f"v_{len(st.session_state.versions):03d}.html").write_text(version["html"], encoding="utf-8")
 
         # Final response with per-finding context
@@ -401,17 +416,18 @@ if st.session_state.current_html:
     tab_preview, tab_code, tab_audit = st.tabs(["👁️ Live Preview", "📄 Code", "📋 Audit Scorecard"])
 
     with tab_preview:
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            device = st.radio("Device", ["Desktop", "Tablet", "Mobile"], horizontal=True)
-            widths = {"Desktop": 1200, "Tablet": 768, "Mobile": 375}
-            st.components.v1.html(
-                st.session_state.current_html,
-                height=600,
-                scrolling=True,
-            )
-            # Note: real iframe width control is limited in components; for presentation this is fine
+        device = st.radio("Device", ["Desktop", "Tablet", "Mobile"], horizontal=True)
+        widths = {"Desktop": 1100, "Tablet": 768, "Mobile": 390}
+        w = widths[device]
+        wrapped = f"""
+        <div style="width:{w}px; margin:0 auto; border:1px solid #444; overflow:auto; height:600px;">
+        {st.session_state.current_html}
+        </div>
+        """
+        st.components.v1.html(wrapped, height=620, scrolling=True)
         st.download_button("Download index.html", st.session_state.current_html, "index.html", "text/html")
+        if st.session_state.last_search_ok is not None:
+            st.caption("Last web search: " + ("succeeded" if st.session_state.last_search_ok else "failed / offline"))
 
     with tab_code:
         st.code(st.session_state.current_html, language="html")
@@ -420,8 +436,18 @@ if st.session_state.current_html:
         if st.session_state.last_audit:
             a = st.session_state.last_audit
             st.metric("UX Score", f"{a['score']}/100")
-            context_md = build_finding_context(a, st.session_state.page_relpath, WORKSPACE)
-            st.markdown(context_md)
+            if st.session_state.score_history:
+                st.line_chart(st.session_state.score_history)
+            for i, f in enumerate(a["findings"]):
+                with st.expander(f"{i+1}. [{f['severity'].upper()}] {f['issue']}"):
+                    st.write(f.get("details") or "")
+                    st.write("**Fix:**", f["fix"])
+                    if f.get("diff_hint"):
+                        st.code(f["diff_hint"])
+                    if st.button(f"Apply this fix", key=f"fix_{i}"):
+                        st.session_state.pending_fix = f"Fix only this issue: {f['issue']}. {f['fix']}"
+                        st.rerun()
+            st.markdown(build_finding_context(a, st.session_state.page_relpath, WORKSPACE))
         else:
             st.info("Run an audit to see the scorecard.")
 
