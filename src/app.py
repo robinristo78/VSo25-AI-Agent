@@ -13,6 +13,7 @@ from crewai import Agent, Task, Crew, LLM
 from crewai.tools import tool
 
 from audit_engine import run_audit, format_audit_for_llm
+from project_context import build_finding_context
 
 # ---------------------------------------------------------------------------
 # Config & constants
@@ -67,7 +68,7 @@ def get_llm(model: str, temperature: float = 0.3):
 @tool("Run UX Audit")
 def audit_tool() -> str:
     """Runs a full deterministic + structural UX audit on the currently served page and returns a scored report."""
-    result = run_audit(f"{SERVER_URL}/index.html")
+    result = run_audit(get_current_page_url())
     return format_audit_for_llm(result)
 
 
@@ -109,6 +110,37 @@ if "last_audit" not in st.session_state:
     st.session_state.last_audit = None
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def find_best_index(root: Path) -> Path | None:
+    """Find the most likely main HTML file after a ZIP extract.
+    Prefers index.html with the most text content; ignores .git folders."""
+    candidates = []
+    for p in root.rglob("*.html"):
+        if ".git" in p.parts:
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="ignore")
+            word_count = len(text.split())
+            candidates.append((word_count, p))
+        except Exception:
+            continue
+    if not candidates:
+        return None
+    # Prefer files named index.html, then highest word count
+    candidates.sort(key=lambda x: (x[1].name.lower() == "index.html", x[0]), reverse=True)
+    return candidates[0][1]
+
+
+def get_current_page_url() -> str:
+    """Return the URL the audit/preview should use."""
+    rel = st.session_state.get("page_relpath", "index.html")
+    return f"{SERVER_URL}/{rel}"
+
+if "page_relpath" not in st.session_state:
+    st.session_state.page_relpath = "index.html"
+
+# ---------------------------------------------------------------------------
 # Sidebar – Project & Settings
 # ---------------------------------------------------------------------------
 with st.sidebar:
@@ -117,12 +149,23 @@ with st.sidebar:
 
     if uploaded:
         if uploaded.name.endswith(".zip"):
+            if WORKSPACE.exists():
+                shutil.rmtree(WORKSPACE)
+            WORKSPACE.mkdir()
             with zipfile.ZipFile(io.BytesIO(uploaded.getvalue())) as z:
                 z.extractall(WORKSPACE)
-            st.success("ZIP extracted to workspace/")
+            best = find_best_index(WORKSPACE)
+            if best:
+                rel = best.relative_to(WORKSPACE).as_posix()
+                st.session_state.page_relpath = rel
+                st.session_state.current_html = best.read_text(encoding="utf-8", errors="ignore")
+                st.success(f"ZIP extracted. Using: {rel}")
+            else:
+                st.error("No HTML file found in the ZIP.")
         else:
             html = uploaded.getvalue().decode("utf-8")
             (WORKSPACE / "index.html").write_text(html, encoding="utf-8")
+            st.session_state.page_relpath = "index.html"
             st.session_state.current_html = html
             st.success("index.html saved")
 
@@ -131,7 +174,9 @@ with st.sidebar:
     if st.session_state.versions:
         for i, v in enumerate(reversed(st.session_state.versions[-8:])):
             if st.button(f"{v['time']} – score {v.get('score', '?')}", key=f"ver{i}"):
-                (WORKSPACE / "index.html").write_text(v["html"], encoding="utf-8")
+                target = WORKSPACE / st.session_state.page_relpath
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(v["html"], encoding="utf-8")
                 st.session_state.current_html = v["html"]
                 st.rerun()
 
@@ -145,7 +190,7 @@ with st.sidebar:
     max_iterations = st.slider("Max fix iterations", 1, 4, 2)
     score_threshold = st.slider("Stop when score ≥", 70, 95, 85)
     creative_mode = st.checkbox("Creative generation mode", value=True, help="Higher temperature and bolder design prompts")
-    st.info(f"Serving from http://127.0.0.1:{PORT}/index.html")
+    st.info(f"Serving: {get_current_page_url()}")
 
 # ---------------------------------------------------------------------------
 # Agents (created fresh each run so model/temperature can change)
@@ -161,11 +206,11 @@ def make_agents(model_name: str, creative: bool):
         role="UX & Design Auditor",
         goal="Produce a factual, prioritized audit. Base every claim on the tool output or direct observation of the HTML. Do not invent issues.",
         backstory="""You are a strict, evidence-based UX auditor.
-Your only source of concrete issues is the Run UX Audit tool output. 
-Do not invent problems that the tool did not report. 
-You may add a short, clearly labeled "Design notes" section for atmosphere and theme fit, but you must be critical of sparse content, weak hierarchy, generic layouts, and unfinished pages. 
-Never give an overall positive assessment if the page has high-severity findings or feels like a skeleton. 
-Be concise and precise. Never output JSON or tool-call syntax.""",
+Your ONLY source of concrete issues is the text returned by the Run UX Audit tool. 
+Copy the tool’s findings exactly. Do not add, rename, or invent any problems. 
+Only mention “wrong file” or “empty read” if the tool output itself contains an empty/near-empty finding. 
+You may add one short clearly-labeled "Design notes" paragraph. 
+Never output JSON or tool-call syntax.""",
         tools=[audit_tool, web_search_tool],
         llm=llm_audit,
         allow_delegation=False,
@@ -178,7 +223,7 @@ Be concise and precise. Never output JSON or tool-call syntax.""",
         backstory="""You are a creative senior frontend developer with strong visual taste. 
 You produce pages that feel intentional and atmospheric rather than generic templates. 
 You freely choose pure CSS, Tailwind, Bootstrap, or custom styles based on what serves the concept best. 
-When internet is available you use Web Search to gather real image URLs, color references, or inspiration before coding. 
+When the internet is available you MUST use the Web Search tool before writing or fixing pages to gather real image URLs (prefer images.unsplash.com), color references, or accurate content. 
 You avoid placeholder text and broken image sources. 
 You ALWAYS return only the complete raw HTML document — no markdown fences, no commentary.""",
         tools=[web_search_tool],
@@ -189,7 +234,7 @@ You ALWAYS return only the complete raw HTML document — no markdown fences, no
     return auditor, fixer
 
 # ---------------------------------------------------------------------------
-# Chat UI
+# File-aware fix context is now in project_context.py
 # ---------------------------------------------------------------------------
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
@@ -207,9 +252,9 @@ if prompt:
         progress_log = []
 
         # Load current HTML if exists
-        index_path = WORKSPACE / "index.html"
+        index_path = WORKSPACE / st.session_state.page_relpath
         if index_path.exists():
-            current_html = index_path.read_text(encoding="utf-8")
+            current_html = index_path.read_text(encoding="utf-8", errors="ignore")
             st.session_state.current_html = current_html
         else:
             current_html = ""
@@ -238,7 +283,8 @@ Avoid generic centered-card templates.""" if creative_mode else "Keep the design
 Rules:
 - Choose the styling approach that best serves the concept (pure CSS in <style>, Tailwind, Bootstrap, or custom). Do not default to Tailwind.
 - If internet is available, use Web Search first for real image URLs, color inspiration, or reference sites.
-- Real copy only (no Lorem ipsum). Real image URLs only (never src="#" or placeholder.com services).
+- Real copy only (no Lorem ipsum). Every featured item needs a short description (aim for 80+ words total on the page).
+- Prefer stable image URLs from images.unsplash.com (search first). Never use wallpaperflare, alamy, pinterest, leonardo.ai, or placeholder services.
 - Single clear <h1>, semantic structure, viewport meta, good contrast.
 - Output ONLY the raw HTML document. No markdown fences, no explanations.""",
                 expected_output="Raw HTML document",
@@ -259,7 +305,7 @@ Rules:
         agent_judgment = ""
         for iteration in range(max_iterations):
             status.write(f"Iteration {iteration + 1}/{max_iterations}: running deterministic audit…")
-            audit = run_audit(f"{SERVER_URL}/index.html")
+            audit = run_audit(get_current_page_url())
             st.session_state.last_audit = audit
             final_score = audit["score"]
             progress_log.append(f"Audit #{iteration+1}: score {final_score}")
@@ -270,16 +316,12 @@ Rules:
                 task_audit = Task(
                     description=f"""User request: {prompt}
 
-1. Call the Run UX Audit tool and treat its findings as the only factual issues.
-2. Write the report in this structure:
-   - Deterministic findings (quote the tool’s issues and severities exactly)
-   - Design notes (only if relevant: atmosphere, theme strength, hierarchy, content depth — be critical)
-   - Overall assessment (harsh if the page is sparse, generic, or has high-severity problems)
-3. Do not claim “placeholder images” or “placeholder text” unless the tool explicitly reported them.
-4. Never invent accessibility or structural problems.
-
-Be strict. A skeleton page with little content should not receive a favorable assessment.""",
-                    expected_output="A strict, evidence-based UX report in plain English.",
+1. Call the Run UX Audit tool.
+2. Output the tool’s findings copied exactly.
+3. Only if the tool explicitly reports an empty/near-empty page, say the wrong file may have been loaded.
+4. Otherwise add one short Design notes paragraph and a one-sentence overall assessment.
+5. Never invent findings.""",
+                    expected_output="An evidence-only UX report.",
                     agent=auditor,
                 )
                 crew_audit = Crew(agents=[auditor], tasks=[task_audit], verbose=False)
@@ -334,10 +376,20 @@ Output ONLY the complete corrected raw HTML. No markdown fences.""",
         st.session_state.versions.append(version)
         (VERSIONS / f"v_{len(st.session_state.versions):03d}.html").write_text(version["html"], encoding="utf-8")
 
-        # Final response
+        # Final response with per-finding context
         audit_summary = format_audit_for_llm(st.session_state.last_audit or {"score": 0, "findings": []})
         judgment_block = f"\n\n**Auditor judgment:**\n{agent_judgment}" if agent_judgment else ""
-        response = f"**Done.** Deterministic score: **{final_score}/100**\n\n{audit_summary}{judgment_block}\n\nYou can switch to the Preview / Code / Audit tabs below."
+        finding_context = build_finding_context(
+            st.session_state.last_audit or {},
+            st.session_state.page_relpath,
+            WORKSPACE,
+        )
+        response = (
+            f"**Done.** Deterministic score: **{final_score}/100**\n\n"
+            f"{audit_summary}{judgment_block}\n\n"
+            f"**Per-finding context & related files:**\n{finding_context}\n\n"
+            f"You can switch to the Preview / Code / Audit tabs below."
+        )
         status.update(label="Finished", state="complete")
         st.markdown(response)
         st.session_state.messages.append({"role": "assistant", "content": response})
@@ -368,11 +420,8 @@ if st.session_state.current_html:
         if st.session_state.last_audit:
             a = st.session_state.last_audit
             st.metric("UX Score", f"{a['score']}/100")
-            for f in a["findings"]:
-                with st.expander(f"[{f['severity'].upper()}] {f['category']}: {f['issue']}"):
-                    if f.get("details"):
-                        st.write(f"**Details:** {f['details']}")
-                    st.write(f"**Suggested fix:** {f['fix']}")
+            context_md = build_finding_context(a, st.session_state.page_relpath, WORKSPACE)
+            st.markdown(context_md)
         else:
             st.info("Run an audit to see the scorecard.")
 

@@ -205,8 +205,34 @@ def run_audit(url: str = "http://127.0.0.1:8000/index.html") -> Dict[str, Any]:
                 })
                 score -= 12
 
-            # Content density / sparse page check
+            # Empty / wrong-file detection (only flag truly empty pages)
             word_count = len(text_content.split())
+            title = (soup.title.string or "").strip() if soup.title else ""
+            if word_count < 8 and not title:
+                findings.append({
+                    "category": "System",
+                    "severity": "high",
+                    "issue": f"Empty or near-empty page read ({word_count} words)",
+                    "details": "The served page has almost no content. This usually means the wrong file was loaded.",
+                    "fix": "Confirm the correct index.html path is being served."
+                })
+                score -= 25
+
+            # Unstable / hotlink-protected image hosts
+            unstable_hosts = ("wallpaperflare.com", "alamy.com", "pinterest.com", "leonardo.ai", "dreamstime.com", "shutterstock.com")
+            all_urls = re.findall(r"https?://[^\s\"')]+", html)
+            unstable = [u for u in all_urls if any(h in u.lower() for h in unstable_hosts)]
+            if unstable:
+                findings.append({
+                    "category": "Content / Assets",
+                    "severity": "medium",
+                    "issue": f"{len(unstable)} image URL(s) from unstable or hotlink-protected hosts",
+                    "details": ", ".join(unstable[:3]),
+                    "fix": "Prefer stable public hosts such as images.unsplash.com or local assets."
+                })
+                score -= min(10, len(unstable) * 3)
+
+            # Content density
             if word_count < 40:
                 findings.append({
                     "category": "Content Quality",
