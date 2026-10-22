@@ -1,0 +1,64 @@
+Lõpuülesanne: Tehisintellekt arenduses ja disainis
+ 
+Vali üks ülesanne allolevast variandist vastavalt oma huvidele ja tehnilistele oskustele.
+Kõige lõpus tuleb koostada kokkuvõte, kus mõtled, millised on tugevused, piirangud ja kasutusvõimalused sinu valitud teemast lähtuvalt.
+
+VARIANDID
+1.AGENDI LOOMINE
+Eesmärk: luua agent, mis suudab täita konkreetset tegevust või protsessi (nt failide sorteerimine, infootsing, päevaplaani koostamine, koodi genereerimine jms).
+
+Töövahendid (vali sobiv):
+Rowboat
+Sim Studio AI
+LangChain
+AutoGen (Microsoft)
+LocalAI
+n8n Self-hosted AI Starter Kit
+CrewAI
+Mida pead tegema:
+Kirjelda, millist tegevust või probleemi agent lahendab.
+Koosta agent (või prototüüp) kasutades üht allnimetatud vahendit.
+Esita tööpõhimõte (voodiagramm, koodinäide, kirjeldus).
+Katseta ja kirjelda tulemusi: mis töötas, mis mitte.
+Analüüsi:
+kas agent töötab offline või vajab ühendust;
+millised on tugevused ja piirangud.
+Nr	Tööriist / raamistik	Kasutusviis / keskkond	Tugevused	Piirangud
+1	Rowboat (GitHub)	Avatud lähtekoodiga raamistik AI agentide loomiseks.	Lihtne seadistada; hea õppematerjal; toetab töövoogude loomist.	Vajab Node.js teadmisi; dokumentatsioon veel arenev.
+2	Sim Studio AI (GitHub)	Agentide loomise platvorm, mis kasutab simulatsiooni lähenemist.	Võimaldab agentide käitumise modelleerimist; visuaalne tööriist.	Kompleksne seadistamine; mitte täielikult offline.
+3	LangChain (langchain.com)	Raamistik LLM-põhiste agentide loomiseks (Python/JS).	Väga paindlik; saab kasutada kohalikke LLM-e (nt ollama, LM Studio).	Vajab programmeerimisoskust; dokumentatsioon mahukas.
+4	AutoGen (Microsoft) (GitHub)	Multi-agent raamistik, kus agendid suhtlevad omavahel.	Võimaldab luua koostööd tegevaid agente; hästi dokumenteeritud.	Suhteliselt keerukas installatsioon; eeldab Python'i keskkonda.
+5	LocalAI (localai.io)	Lokaalne LLM server ja agenti tööriist.	Täiesti offline; toetab OpenAI API ühilduvust; töötab Dockeris.	Nõuab võimekat arvutit (GPU eelis); seadistamine võib olla aeganõudev.
+6	n8n Self-Hosted AI Kit (GitHub)	Automatiseerimisplatvorm, mis toetab AI agente.	Visuaalne töövoogude loomine; offline Dockeris; integreerib API-sid.	Vajab n8n tundmist; sobib pigem tehnilisematele kasutajatele.
+7	OpenAI Swarm (GitHub)	Lihtne raamistik agentide orkestreerimiseks.	Väga lihtne ja kiire algus; sobib õppimiseks ja demodeks.	Eksperimentaalne; sõltub OpenAI API-st, seega mitte täielikult offline.
+8	Ollama + LangChain (ollama.ai)	Kohalik LLM käitaja (Mac/Linux/Windows).	Töötab täielikult lokaalselt; ühildub LangChaini agentidega.	Piiratud mudelivalik; mälumahu piirangud.
+9	CrewAI (GitHub)	Avatud lähtekoodiga agentide koostöö raamistik.	Hea multi-agent tööde ja rollide jagamiseks; lihtne struktuur.	Veel arenev projekt; vajab Python'i tundmist.
+10	ChromaDB + LocalAI	Kohalik andmebaas + LLM agentuuri kombinatsioon.	Võimaldab mälu lisamist agentidele; sobib täiesti offline tööks.	Tuleb ise seadistada ja integreerida; nõuab tehnilist oskust.
+2. RAKENDUSE LOOMINE PROMPTIDE ABIL
+Eesmärk: luua rakendus, kasutades tööriista, mis genereerib lahenduse kirjelduse (prompti) põhjal.
+
+Tööriistad (vali üks):
+Cursor AI
+Cody AI
+Lovable
+biela.dev
+rocket.new
+bolt.dev
+Mida pead tegema:
+Kirjelda oma idee (nt “loon lihtsa to-do rakenduse”, “veebilehe disaini tööriist”, “kalkulaator”).
+Kasuta valitud tööriistu (vähemalt 2 erinevat), et genereerida rakenduse esimene versioon.
+Katseta ja dokumenteeri protsess:
+mida süsteem lõi automaatselt;
+mida pidid ise parandama.
+Kirjelda, kui palju kontrolli ja loomingulisust tööriist lubab.
+
+Too välja eelised ja puudused võrreldes käsitsi arendamisega.
+
+Kokkuvõte
+Anna ülevaade tehtust ja võta teema kokku vastates veel järgmistele küsimustele:
+
+Mis su lähenemisel hästi toimis?
+Mis oli keeruline või piiratud?
+Milliseid tehnilisi või eetilisi küsimusi tekkis (nt andmete turvalisus, autoriõigused, usaldus)?
+Mis oleks võimalik edasi arendada või täiustada?
+Kursusue viimastes tundides annad oma tehtud tööst ülevaate. Igale õpilasele on 15 min aega oma tehtu tutvustamiseks.

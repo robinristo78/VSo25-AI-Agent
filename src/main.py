@@ -60,11 +60,14 @@ ux_evaluator = Agent(
 )
 
 # 5. Ülesanded
+print("Welcome to the AI Web Agency!")
+user_prompt = input("What would you like the agents to build today? \n> ")
+
 task1 = Task(
-    description='Create a clean, modern dark mode login form. Use Tailwind CSS CDN. It must have email, password, and submit button. IMPORTANT: Return ONLY the raw HTML code. Do not wrap it in ```html markdown blocks. Do not add any conversational text.',
-    expected_output='Raw HTML code for the login form without markdown formatting.',
+    description=f"{user_prompt}. Use Tailwind CSS CDN. IMPORTANT: Return ONLY the raw HTML code. Do not wrap it in ```html markdown blocks. Do not add any conversational text.",
+    expected_output='Raw HTML code without markdown formatting.',
     agent=frontend_developer,
-    output_file='index.html' # See rida sunnib CrewAI-d tulemuse automaatselt faili salvestama!
+    output_file='index.html'
 )
 
 task2 = Task(

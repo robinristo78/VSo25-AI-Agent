@@ -2,4 +2,7 @@
 __pycache__/
 *.png
 .env
-index.html
+src/index.html
+repomix-output.xml
+versions/*
+workspace/*
